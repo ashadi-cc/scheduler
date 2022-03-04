@@ -15,7 +15,7 @@ type FnJob func(ctx context.Context) error
 // Create interface
 type SchedulerJob interface {
 	Cancel()
-	Start(ctx context.Context, needRecover bool)
+	Start(ctx context.Context, maxTried int)
 }
 
 type scheduledJob struct {
@@ -27,6 +27,7 @@ type scheduledJob struct {
 	isStarted    bool
 	cancelSignal chan interface{}
 	isCancelled  bool
+	numError     int
 }
 
 // NewScheduleJob returns new instance of SchedulerJob
@@ -56,7 +57,7 @@ func (s *scheduledJob) Cancel() {
 	s.isCancelled = true
 }
 
-func (s *scheduledJob) Start(ctx context.Context, needRecover bool) {
+func (s *scheduledJob) Start(ctx context.Context, maxTried int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.isStarted {
@@ -79,30 +80,37 @@ func (s *scheduledJob) Start(ctx context.Context, needRecover bool) {
 				return
 			case <-tick.C:
 				t := time.Now()
-				s.executeWithRecovery(ctx, needRecover)
+				s.executeWithRecovery(ctx, maxTried)
 				log.Println("Job execution done", "name", s.name, "duration", time.Since(t), "start", t, "period", s.period)
 			}
 		}
 	}(ctx)
 }
 
-func (s *scheduledJob) executeWithRecovery(ctx context.Context, needRecover bool) {
-	if needRecover {
-		defer func() {
-			p := recover()
-			if p == nil {
-				return
-			}
-			switch v := p.(type) {
-			case error:
-				log.Println("ScheduledJob paniced", v, "name", s.name, "period", s.period)
-			default:
-				log.Println("ScheduledJob paniced", fmt.Errorf("unknown panic type %T", v), "panic", v)
-			}
-		}()
-	}
+func (s *scheduledJob) executeWithRecovery(ctx context.Context, maxTried int) {
+	defer func() {
+		if s.numError >= maxTried {
+			log.Println("max tried reached")
+			close(s.cancelSignal)
+		}
+	}()
+	defer func() {
+		p := recover()
+		if p == nil {
+			return
+		}
+
+		s.numError = s.numError + 1
+		switch v := p.(type) {
+		case error:
+			log.Println("ScheduledJob paniced", v, "name", s.name, "period", s.period)
+		default:
+			log.Println("ScheduledJob paniced", fmt.Errorf("unknown panic type %T", v), "panic", v)
+		}
+	}()
 
 	if err := s.job(ctx); err != nil {
 		log.Println("job error", err)
+		s.numError = s.numError + 1
 	}
 }

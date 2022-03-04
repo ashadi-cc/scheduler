@@ -12,14 +12,14 @@ func main() {
 	fnJob := func(ctx context.Context) error {
 		log.Println("Run function")
 
-		return nil
+		panic("wat panic")
 	}
 
 	sc := scheduler.NewScheduleJob("test_job", time.Second, fnJob)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
-	sc.Start(ctx, false)
+	sc.Start(ctx, 2)
 
 	<-ctx.Done()
 }
